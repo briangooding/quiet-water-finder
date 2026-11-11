@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Quiet Water Finder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Layout: field-notebook sidebar (search, ranked spots, spot detail) beside a full-height map; stacks map-over-list on phones. */
+:root {
+  --bg: #f2f5f1; --panel: #fbfcfa; --fg: #16231e; --muted: #5a6a62; --line: #d3dcd5;
+  --accent: #0a6c88; --accent-ink: #ffffff; --land: #6c8b36; --water: #2677b8;
+  --hot: #b8661a; --warn: #a2471f; --chip: #e5ece6;
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "Public Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1714; --panel: #15201c; --fg: #e3ece6; --muted: #93a59b; --line: #2a3a33;
+    --accent: #4fb6d3; --accent-ink: #06212a; --land: #9cbc5c; --water: #5aa6e6;
+    --hot: #e39a4b; --warn: #f0885c; --chip: #21302a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1714; --panel: #15201c; --fg: #e3ece6; --muted: #93a59b; --line: #2a3a33;
+  --accent: #4fb6d3; --accent-ink: #06212a; --land: #9cbc5c; --water: #5aa6e6;
+  --hot: #e39a4b; --warn: #f0885c; --chip: #21302a; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.5 var(--body); }
+[hidden] { display: none !important; }
+.app { display: grid; grid-template-columns: minmax(320px, 400px) 1fr; height: 100%; }
+aside { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow-y: auto; }
+#map { min-height: 0; }
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: 52vh auto; height: auto; }
+  #map { order: -1; height: 52vh; }
+  aside { border-right: 0; border-top: 1px solid var(--line); }
+}
+.head { padding: 18px max(16px, env(safe-area-inset-left, 0px)) 14px; border-bottom: 1px solid var(--line); display: grid; gap: 12px; }
+h1 { font: 700 1.55rem/1.1 var(--display); margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+h1 small { display: block; font: 400 0.86rem/1.4 var(--body); color: var(--muted); letter-spacing: 0; margin-top: 4px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+input[type=text], select { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; min-width: 0; }
+input[type=text] { flex: 1 1 160px; }
+button { font: 500 0.92rem var(--body); border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+button:hover { border-color: var(--accent); }
+button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible, .spot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.filters label { display: inline-flex; gap: 5px; align-items: center; font-size: 0.82rem; background: var(--chip); border-radius: 999px; padding: 3px 10px 3px 7px; cursor: pointer; user-select: none; }
+.status { font: 0.8rem/1.4 var(--mono); color: var(--muted); min-height: 1.4em; }
+.status.err { color: var(--warn); }
+.scroll { flex: 1 0 auto; }
+.intro { padding: 16px max(16px, env(safe-area-inset-left, 0px)); display: grid; gap: 10px; color: var(--muted); font-size: 0.9rem; }
+.intro b { color: var(--fg); }
+.listhead { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 16px 6px; font: 600 0.72rem var(--body); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); gap: 8px; }
+.listhead select { font-size: 0.8rem; padding: 3px 6px; text-transform: none; letter-spacing: 0; }
+ol.spots { list-style: none; margin: 0; padding: 0 0 24px; }
+.spot { display: grid; grid-template-columns: 46px 1fr; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--line); cursor: pointer; }
+.spot:hover, .spot.sel { background: var(--chip); }
+.score { font: 500 1.15rem/1 var(--mono); text-align: center; padding-top: 3px; font-variant-numeric: tabular-nums; }
+.score span { display: block; font: 0.62rem var(--body); color: var(--muted); margin-top: 3px; letter-spacing: 0.05em; text-transform: uppercase; }
+.spot h3 { font: 600 0.95rem/1.3 var(--body); margin: 0; overflow-wrap: anywhere; }
+.meta { font-size: 0.8rem; color: var(--muted); overflow-wrap: anywhere; }
+.tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.tag { font: 0.7rem/1.6 var(--mono); padding: 0 6px; border-radius: 4px; background: var(--chip); color: var(--fg); }
+.tag.w { color: var(--water); } .tag.l { color: var(--land); } .tag.h { color: var(--hot); } .tag.x { color: var(--warn); }
+.detail { padding: 14px 16px 24px; display: grid; gap: 10px; border-bottom: 1px solid var(--line); }
+.detail h2 { font: 700 1.25rem/1.15 var(--display); margin: 0; text-wrap: balance; }
+.detail dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; font-size: 0.86rem; }
+.detail dt { color: var(--muted); }
+.detail dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.links { display: flex; flex-wrap: wrap; gap: 6px; }
+.links a { font-size: 0.85rem; color: var(--accent); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; text-decoration: none; }
+.why { font-size: 0.82rem; color: var(--muted); margin: 0; padding-left: 18px; }
+.note { font-size: 0.78rem; color: var(--muted); }
+.legend { background: var(--panel); color: var(--fg); padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line); font: 0.75rem/1.6 var(--body); }
+.legend i { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.leaflet-container { font-family: var(--body); background: var(--bg); }
+.leaflet-popup-content { font: 0.82rem/1.4 var(--body); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="head">
+      <h1>Quiet Water Finder<small>Public land beside ponds, streams, springs and wetlands, ranked by how unvisited they look. For finding aquatic insects to photograph.</small></h1>
+      <form class="row" id="searchForm">
+        <input type="text" id="place" placeholder="Town, address or lat, lng" aria-label="Place to search around">
+        <button class="primary" type="submit">Search</button>
+        <button type="button" id="locBtn" title="Use my current location">Near me</button>
+      </form>
+      <div class="row">
+        <label for="radius" class="meta">Within</label>
+        <select id="radius">
+          <option value="3">3 miles</option>
+          <option value="6" selected>6 miles</option>
+          <option value="10">10 miles</option>
+          <option value="15">15 miles (slow)</option>
+        </select>
+        <span class="meta">or click the map, then <button type="button" id="hereBtn">Search map center</button></span>
+      </div>
+      <div class="filters" id="filters">
+        <label><input type="checkbox" value="pond" checked> Ponds</label>
+        <label><input type="checkbox" value="stream" checked> Streams</label>
+        <label><input type="checkbox" value="spring" checked> Springs</label>
+        <label><input type="checkbox" value="wetland" checked> Wetlands</label>
+        <label><input type="checkbox" value="river"> Rivers</label>
+        <label><input type="checkbox" value="lake"> Big lakes</label>
+        <label><input type="checkbox" value="ditch"> Ditches</label>
+        <label><input type="checkbox" id="openOnly" checked> Open access only</label>
+      </div>
+      <div class="status" id="status" role="status"></div>
+    </div>
+    <div class="scroll" id="scroll">
+      <div class="intro" id="intro">
+        <p><b>How it works.</b> It pulls public land from the USGS Protected Areas Database (PAD-US), streams, ponds, marshes and springs from the USGS National Hydrography Dataset, parking and trailheads from OpenStreetMap, and aquatic insect sightings from iNaturalist. Every stretch of water that touches public land becomes a spot.</p>
+        <p><b>Hidden score.</b> Higher means less known: unnamed water, far from parking and trailheads, few iNaturalist records nearby, small ponds and seeps where dragonflies, damselflies, mayflies and caddisflies breed.</p>
+        <p>Search a US town or tap <b>Near me</b>. Try <button type="button" class="sample" data-q="Asheville, NC">Asheville, NC</button> <button type="button" class="sample" data-q="Gainesville, FL">Gainesville, FL</button> <button type="button" class="sample" data-q="Bend, OR">Bend, OR</button></p>
+        <p class="note">PAD-US access codes are a guide, not a permit. Check the land manager's rules before you go, especially for wildlife refuges and military land.</p>
+      </div>
+      <div id="detail" class="detail" hidden></div>
+      <div id="results" hidden>
+        <div class="listhead"><span id="count"></span>
+          <select id="sort" aria-label="Sort spots">
+            <option value="score">Most hidden</option>
+            <option value="dist">Closest</option>
+            <option value="bugs">Most insect records</option>
+          </select>
+        </div>
+        <ol class="spots" id="list"></ol>
+      </div>
+    </div>
+  </aside>
+  <div id="map"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+"use strict";
+const PADUS = "https://services.arcgis.com/v01gqwM5QqNysAAi/arcgis/rest/services/PADUS_Public_Access/FeatureServer/0/query";
+const NHD = "https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer";
+const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter", "https://overpass.private.coffee/api/interpreter"];
+const INAT = "https://api.inaturalist.org/v1";
+// Odonata, mayflies, stoneflies, caddisflies, Megaloptera, water striders, diving beetles,
+// giant water bugs, waterscorpions, backswimmers, whirligig beetles
+const BUG_TAXA = "47792,48011,47504,62164,47864,59653,57659,81570,119347,56556,119971";
+const ACCESS = { OA: "Open access", RA: "Restricted (permit or season)", UK: "Access unknown", XA: "Closed" };
+const HABITAT = {
+  pond: "Still water: dragonflies, damselflies, backswimmers, diving beetles, giant water bugs.",
+  lake: "Look for weedy shallows and inlets: damselflies, dragonfly exuviae on reeds.",
+  wetland: "Marsh and swamp: damselflies, waterscorpions, darners, skimmers.",
+  spring: "Cold, steady flow: spring-specialist caddisflies, spiketails, seep damselflies.",
+  stream: "Riffles and leaf packs: mayflies, stoneflies, caddisflies, dobsonflies, water striders in pools.",
+  river: "Riffles and banks: clubtails, stoneflies, dobsonflies, caddis cases on rocks.",
+  ditch: "Slow, warm water: water striders, backswimmers, skimmers."
+};
+
+const $ = (id) => document.getElementById(id);
+const store = { get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } },
+                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
+
+// ---------- map ----------
+const map = L.map("map", { zoomControl: true }).setView([39.5, -98.35], 4);
+const bases = {
+  "USGS Topo": L.tileLayer("https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}", { maxZoom: 16, attribution: "USGS The National Map" }),
+  "Satellite": L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Esri, Maxar, Earthstar Geographics" }),
+  "Streets": L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors" })
+};
+bases["USGS Topo"].addTo(map);
+const landLayer = L.layerGroup().addTo(map);
+const bugLayer = L.layerGroup().addTo(map);
+const parkLayer = L.layerGroup();
+const spotLayer = L.layerGroup().addTo(map);
+let centerMarker = null, radiusCircle = null;
+L.control.layers(bases, { "Public land": landLayer, "Insect records (iNat)": bugLayer, "Parking & trailheads": parkLayer, "Spots": spotLayer }).addTo(map);
+const legend = L.control({ position: "bottomleft" });
+legend.onAdd = () => { const d = L.DomUtil.create("div", "legend");
+  d.innerHTML = '<div><i style="background:var(--land);opacity:.6"></i>Public land</div><div><i style="background:var(--hot);border-radius:50%"></i>Spot (bigger = more hidden)</div><div><i style="background:var(--accent);border-radius:50%"></i>Insect record</div>'; return d; };
+legend.addTo(map);
+map.on("click", (e) => { setCenter(e.latlng.lat, e.latlng.lng); });
+
+function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+function setCenter(lat, lng) {
+  if (centerMarker) centerMarker.setLatLng([lat, lng]);
+  else centerMarker = L.circleMarker([lat, lng], { radius: 6, color: css("--fg"), weight: 2, fillOpacity: 0 }).addTo(map);
+  centerMarker._ll = { lat, lng };
+}
+
+// ---------- geometry ----------
+const R = 6371000;
+function hav(a, b) {
+  const t = Math.PI / 180, dLat = (b.lat - a.lat) * t, dLng = (b.lng - a.lng) * t;
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * t) * Math.cos(b.lat * t) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+function inRing(x, y, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+function inPoly(x, y, poly) { // poly = [outer, ...holes]
+  if (!inRing(x, y, poly[0])) return false;
+  for (let k = 1; k < poly.length; k++) if (inRing(x, y, poly[k])) return false;
+  return true;
+}
+function ringBox(r) { let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+  for (const [x, y] of r) { if (x < a) a = x; if (y < b) b = y; if (x > c) c = x; if (y > d) d = y; } return [a, b, c, d]; }
+function ringAreaM2(pts) { // pts [{lat,lng}]
+  if (pts.length < 3) return 0;
+  const lat0 = pts[0].lat * Math.PI / 180, kx = 111320 * Math.cos(lat0), ky = 110540;
+  let s = 0;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) s += (pts[j].lng * kx) * (pts[i].lat * ky) - (pts[i].lng * kx) * (pts[j].lat * ky);
+  return Math.abs(s / 2);
+}
+function sampleLine(pts, step) { // every `step` metres along a polyline
+  const out = []; if (!pts.length) return out;
+  out.push(pts[0]); let carry = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i], d = hav(a, b);
+    let pos = step - carry;
+    while (pos < d) { const f = pos / d; out.push({ lat: a.lat + (b.lat - a.lat) * f, lng: a.lng + (b.lng - a.lng) * f }); pos += step; }
+    carry = (carry + d) % step;
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+
+// ---------- fetching ----------
+async function getJSONOnce(url, opts, timeoutMs) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeoutMs);
+  try { const r = await fetch(url, { ...opts, signal: ctl.signal }); if (!r.ok) throw new Error(r.status + " " + r.statusText); return await r.json(); }
+  finally { clearTimeout(t); }
+}
+async function getJSON(url, opts = {}, timeoutMs = 60000, tries = 3) {
+  // the USGS servers drop the odd request, so retry network errors and 5xx answers after a short pause
+  for (let i = 1; ; i++) {
+    try { return await getJSONOnce(url, opts, timeoutMs); }
+    catch (e) { if (i >= tries || /^4\d\d/.test(e.message)) throw e; await sleep(1500 * i); }
+  }
+}
+async function geocode(q) {
+  const m = q.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+  if (m) return { lat: +m[1], lng: +m[2], name: q.trim() };
+  // Photon (OpenStreetMap data), biased to the middle of the US and filtered to US results
+  const j = await getJSON("https://photon.komoot.io/api/?limit=8&lang=en&lat=39.5&lon=-98.35&q=" + encodeURIComponent(q));
+  const f = (j.features || []).find((x) => x.properties.countrycode === "US");
+  if (!f) throw new Error("Couldn't find \"" + q + "\" in the US. Try a town and state, like \"Ely, MN\".");
+  const pr = f.properties;
+  return { lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0], name: [pr.name, pr.state].filter(Boolean).join(", ") };
+}
+async function fetchLand(box) {
+  const feats = []; let offset = 0;
+  for (let page = 0; page < 8; page++) {
+    const p = new URLSearchParams({ where: "Pub_Access IN ('OA','RA','UK') AND Category <> 'Easement'", geometry: box.join(","), geometryType: "esriGeometryEnvelope",
+      inSR: 4326, outSR: 4326, spatialRel: "esriSpatialRelIntersects", outFields: "Unit_Nm,Pub_Access,MngNm_Desc,MngTp_Desc,DesTp_Desc,GIS_Acres,Category",
+      returnGeometry: true, geometryPrecision: 5, maxAllowableOffset: 0.00005, resultOffset: offset, resultRecordCount: 1000, f: "geojson" });
+    const j = await getJSON(PADUS + "?" + p);
+    feats.push(...(j.features || []));
+    if (!j.properties || !j.properties.exceededTransferLimit) { if ((j.features || []).length < 1000) break; }
+    offset += 1000;
+  }
+  // PAD-US Public Access merges same-named units nationwide, so keep only the parts inside the search box.
+  const parts = [];
+  for (const f of feats) {
+    if (!f.geometry) continue;
+    const polys = f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates;
+    for (const poly of polys) {
+      const bb = ringBox(poly[0]);
+      if (bb[2] < box[0] || bb[0] > box[2] || bb[3] < box[1] || bb[1] > box[3]) continue;
+      parts.push({ poly, bb, props: f.properties });
+    }
+  }
+  return parts;
+}
+async function nhdLayer(layer, where, fields, box, offset) {
+  const p = new URLSearchParams({ where, geometry: box.join(","), geometryType: "esriGeometryEnvelope", inSR: 4326, outSR: 4326,
+    spatialRel: "esriSpatialRelIntersects", outFields: fields, returnGeometry: true, geometryPrecision: 5, maxAllowableOffset: 0.0001, f: "geojson" });
+  if (offset != null) { p.set("resultOffset", offset); p.set("resultRecordCount", 2000); }
+  return getJSON(NHD + "/" + layer + "/query?" + p, {}, 60000);
+}
+async function fetchWater(box) {
+  // USGS National Hydrography Dataset, 1:24k: springs and waterfalls, ponds/lakes/marshes, streams and ditches
+  const flowWhere = "ftype IN (460,336)";
+  const cnt = await getJSON(NHD + "/6/query?" + new URLSearchParams({ where: flowWhere, geometry: box.join(","), geometryType: "esriGeometryEnvelope", inSR: 4326, returnCountOnly: true, f: "json" }));
+  const pages = Math.min(20, Math.ceil((cnt.count || 0) / 2000));
+  const flows = [];
+  for (let i = 0; i < pages; i += 4) {
+    const batch = [];
+    for (let k = i; k < Math.min(pages, i + 4); k++) batch.push(nhdLayer(6, flowWhere, "gnis_name,ftype,fcode", box, k * 2000));
+    for (const j of await Promise.all(batch)) flows.push(...(j.features || []));
+    status(`Loading streams… ${flows.length.toLocaleString()} of ${cnt.count.toLocaleString()}`);
+  }
+  const [bodies, points] = await Promise.all([
+    nhdLayer(12, "FTYPE IN (390,436,466)", "GNIS_NAME,FTYPE,FCODE,AREASQKM", box),
+    nhdLayer(0, "FTYPE IN (458,487)", "GNIS_NAME,FTYPE,FCODE", box)
+  ]);
+  return { flows, bodies: bodies.features || [], points: points.features || [] };
+}
+async function fetchAccess(box) {
+  // parking, trailheads and boat ramps from OpenStreetMap; optional, the public servers are often overloaded
+  const b = [box[1], box[0], box[3], box[2]].join(",");
+  const q = `[out:json][timeout:40];(node["amenity"="parking"](${b});way["amenity"="parking"](${b});node["highway"="trailhead"](${b});node["leisure"="slipway"](${b});way["leisure"="slipway"](${b}););out center qt;`;
+  // public Overpass servers are often busy; start with the one that answered last time, then try the others
+  let lastErr;
+  const good = store.get("qwf-overpass");
+  const order = OVERPASS.includes(good) ? [good, ...OVERPASS.filter((u) => u !== good)] : OVERPASS;
+  for (const url of order) {
+    try {
+      const j = await getJSON(url, { method: "POST", body: "data=" + encodeURIComponent(q), headers: { "Content-Type": "application/x-www-form-urlencoded" } }, 45000, 1);
+      if (j.remark && /runtime error|timed out/i.test(j.remark) && !j.elements.length) throw new Error(j.remark);
+      store.set("qwf-overpass", url);
+      return j.elements;
+    } catch (e) { lastErr = e; }
+  }
+  return null;
+}
+async function fetchBugs(box) {
+  const out = []; let total = 0;
+  for (let page = 1; page <= 3; page++) {
+    const p = new URLSearchParams({ taxon_id: BUG_TAXA, swlng: box[0], swlat: box[1], nelng: box[2], nelat: box[3], per_page: 200, page, geo: "true", order_by: "observed_on" });
+    const j = await getJSON(INAT + "/observations?" + p);
+    total = j.total_results;
+    for (const o of j.results) {
+      if (!o.geojson) continue;
+      out.push({ lat: o.geojson.coordinates[1], lng: o.geojson.coordinates[0], name: (o.taxon && (o.taxon.preferred_common_name || o.taxon.name)) || "Unknown",
+        sci: o.taxon && o.taxon.name, date: o.observed_on, url: o.uri, obscured: o.obscured });
+    }
+    if (page * 200 >= total) break;
+    await sleep(1000);
+  }
+  return { obs: out, total };
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---------- analysis ----------
+const toLL = (c) => ({ lat: c[1], lng: c[0] });
+function linesOf(g) { // GeoJSON geometry -> arrays of {lat,lng}; polygons give their outer rings
+  if (!g) return [];
+  if (g.type === "Point") return [[toLL(g.coordinates)]];
+  if (g.type === "LineString") return [g.coordinates.map(toLL)];
+  if (g.type === "MultiLineString") return g.coordinates.map((l) => l.map(toLL));
+  if (g.type === "Polygon") return [g.coordinates[0].map(toLL)];
+  if (g.type === "MultiPolygon") return g.coordinates.map((p) => p[0].map(toLL));
+  return [];
+}
+function nhdWaters(nhd) {
+  const waters = [];
+  for (const f of nhd.flows) {
+    const p = f.properties, name = p.gnis_name || "";
+    const kind = p.ftype === 336 ? "ditch" : /\briver\b/i.test(name) ? "river" : "stream";
+    const flow = p.fcode === 46003 ? "intermittent" : p.fcode === 46007 ? "ephemeral" : "";
+    const label = kind === "ditch" ? "Canal or ditch" : kind === "river" ? "River" : flow ? (flow === "ephemeral" ? "Ephemeral stream" : "Intermittent stream") : "Stream";
+    waters.push({ kind, label, name, area: 0, seasonal: !!flow, lines: linesOf(f.geometry) });
+  }
+  for (const f of nhd.bodies) {
+    const p = f.properties, area = (p.AREASQKM || 0) * 1e6, name = p.GNIS_NAME || "";
+    let kind, label;
+    if (p.FTYPE === 466) { kind = "wetland"; label = "Swamp or marsh"; }
+    else if (area > 50000) { kind = "lake"; label = p.FTYPE === 436 ? "Reservoir" : "Lake"; }
+    else { kind = "pond"; label = area < 5000 ? "Small pond" : "Pond"; }
+    waters.push({ kind, label, name, area, seasonal: p.FCODE === 39001 || p.FCODE === 46601, lines: linesOf(f.geometry) });
+  }
+  for (const f of nhd.points) {
+    const p = f.properties;
+    waters.push(p.FTYPE === 458 ? { kind: "spring", label: "Spring or seep", name: p.GNIS_NAME || "", area: 0, seasonal: false, lines: linesOf(f.geometry) }
+                                : { kind: "stream", label: "Waterfall", name: p.GNIS_NAME || "", area: 0, seasonal: false, lines: linesOf(f.geometry) });
+  }
+  return waters;
+}
+function accessPoints(els) {
+  const access = [];
+  for (const el of els || []) {
+    const t = el.tags || {};
+    const lat = el.lat ?? (el.center && el.center.lat), lng = el.lon ?? (el.center && el.center.lon);
+    if (lat != null) access.push({ lat, lng, kind: t.highway === "trailhead" ? "Trailhead" : t.leisure === "slipway" ? "Boat ramp" : "Parking", name: t.name });
+  }
+  return access;
+}
+
+function analyse(land, nhd, accessEls, bugs, center, radiusM) {
+  const waters = nhdWaters(nhd), access = accessPoints(accessEls), haveAccess = accessEls != null;
+
+  const latPad = 30 / 110540, lngPad = 30 / (111320 * Math.cos(center.lat * Math.PI / 180));
+  const offsets = [[0, 0], [lngPad, 0], [-lngPad, 0], [0, latPad], [0, -latPad]];
+  function unitAt(p) { // smallest public unit within ~30 m of the point
+    let best = null;
+    for (const part of land) {
+      const bb = part.bb;
+      if (p.lng < bb[0] - lngPad || p.lng > bb[2] + lngPad || p.lat < bb[1] - latPad || p.lat > bb[3] + latPad) continue;
+      for (const [dx, dy] of offsets) {
+        if (inPoly(p.lng + dx, p.lat + dy, part.poly)) {
+          const pr = part.props, acres = pr.GIS_Acres || 0;
+          const rank = (pr.Category === "Fee" ? 0 : 1) * 1e9 + acres;
+          if (!best || rank < best.rank) best = { rank, props: pr, onEdge: dx !== 0 || dy !== 0 };
+          break;
+        }
+      }
+    }
+    return best;
+  }
+
+  const spots = [];
+  for (const w of waters) {
+    const pts = [];
+    for (const line of w.lines) pts.push(...(line.length === 1 ? line : sampleLine(line, 120)));
+    const byUnit = new Map();
+    for (const p of pts) {
+      if (hav(p, center) > radiusM) continue;
+      const u = unitAt(p); if (!u) continue;
+      const key = u.props.Unit_Nm + "|" + u.props.MngNm_Desc;
+      if (!byUnit.has(key)) byUnit.set(key, { props: u.props, pts: [], edge: 0 });
+      const g = byUnit.get(key); g.pts.push(p); if (u.onEdge) g.edge++;
+    }
+    for (const g of byUnit.values()) {
+      const mid = g.pts[Math.floor(g.pts.length / 2)];
+      spots.push({ water: w, unit: g.props, lat: mid.lat, lng: mid.lng, len: w.kind === "spring" ? 0 : g.pts.length * 120, edgeOnly: g.edge === g.pts.length });
+    }
+  }
+
+  for (const s of spots) {
+    s.dist = hav(s, center);
+    let near = null, nd = Infinity;
+    for (const a of access) { const d = hav(a, s); if (d < nd) { nd = d; near = a; } }
+    s.access = near; s.accessDist = haveAccess ? nd : null;
+    s.bugs = bugs.filter((o) => hav(o, s) < 500);
+    s.popularity = null;
+    score(s);
+  }
+
+  // NHD splits streams into short reaches, so merge spots of the same kind in the same unit that sit close together,
+  // keeping the most hidden one and adding up the length of water on public land
+  const byUnit = new Map();
+  for (const s of spots) { const k = s.unit.Unit_Nm + "|" + s.water.kind; if (!byUnit.has(k)) byUnit.set(k, []); byUnit.get(k).push(s); }
+  const kept = [];
+  for (const group of byUnit.values()) {
+    group.sort((a, b) => b.score - a.score || b.len - a.len);
+    const mine = [];
+    for (const s of group) {
+      const gap = s.water.name ? 900 : 450;
+      const k = mine.find((m) => hav(m, s) < gap && (m.water.name === s.water.name || !s.water.name));
+      if (k) { k.len += s.len; continue; }
+      mine.push(s);
+    }
+    kept.push(...mine);
+  }
+  return { spots: kept, access, haveAccess };
+}
+
+function score(s) {
+  const why = []; let v = 45;
+  const w = s.water;
+  if (!w.name) { v += 10; why.push("Unnamed water"); }
+  if (w.kind === "spring") { v += 14; why.push("Spring or seep"); }
+  else if (w.kind === "pond" && w.area < 5000) { v += 12; why.push("Small pond, under half a hectare"); }
+  else if (w.kind === "pond" || w.kind === "wetland") { v += 8; why.push(w.label + ", good breeding habitat"); }
+  else if (w.kind === "stream") { v += 6; why.push("Small stream"); }
+  else if (w.kind === "lake") { v -= 8; why.push("Large lake, usually busy"); }
+  if (s.accessDist == null) { /* parking data unavailable this search */ }
+  else if (s.accessDist > 1200) { v += 16; why.push("Over 1.2 km from any mapped parking or trailhead"); }
+  else if (s.accessDist > 500) { v += 9; why.push("Half a km or more from parking"); }
+  else if (s.accessDist < 150) { v -= 10; why.push("Right by a parking area"); }
+  if (!s.unit.Unit_Nm || /^(unknown|unnamed)/i.test(s.unit.Unit_Nm)) { v += 4; }
+  if (/wilderness|national park|state park/i.test(s.unit.DesTp_Desc || "") && s.accessDist < 500) { v -= 5; }
+  if (s.unit.Pub_Access === "RA") { v -= 8; why.push("Restricted access: check permits or seasons"); }
+  if (s.unit.Pub_Access === "UK") { v -= 4; why.push("Access status unknown"); }
+  if (s.edgeOnly) { v -= 3; why.push("Water runs along the boundary"); }
+  if (s.popularity != null) {
+    if (s.popularity === 0) { v += 16; why.push("No iNaturalist records of anything within 500 m"); }
+    else if (s.popularity < 10) { v += 10; why.push("Only " + s.popularity + " iNaturalist records within 500 m"); }
+    else if (s.popularity < 60) { v += 3; }
+    else if (s.popularity > 300) { v -= 14; why.push(s.popularity + " iNaturalist records within 500 m: well visited"); }
+    else if (s.popularity > 120) { v -= 6; }
+  }
+  if (s.water.seasonal) why.push("Seasonal: may be dry late summer");
+  s.score = Math.max(1, Math.min(99, Math.round(v)));
+  s.why = why;
+}
+
+// ---------- state + rendering ----------
+let state = { spots: [], center: null, run: 0, selected: null, markers: new Map() };
+
+function status(msg, err) { const el = $("status"); el.textContent = msg || ""; el.classList.toggle("err", !!err); }
+function fmtDist(m) { const mi = m / 1609.34; return mi < 0.2 ? Math.round(m * 3.281) + " ft" : mi.toFixed(mi < 10 ? 1 : 0) + " mi"; }
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]); }
+function activeKinds() { return new Set([...document.querySelectorAll("#filters input[value]")].filter((i) => i.checked).map((i) => i.value)); }
+function visibleSpots() {
+  const kinds = activeKinds(), open = $("openOnly").checked, sort = $("sort").value;
+  const list = state.spots.filter((s) => kinds.has(s.water.kind) && (!open || s.unit.Pub_Access === "OA"));
+  list.sort(sort === "dist" ? (a, b) => a.dist - b.dist : sort === "bugs" ? (a, b) => b.bugs.length - a.bugs.length || b.score - a.score : (a, b) => b.score - a.score);
+  return list;
+}
+function lenText(s) {
+  // still water is described by its area instead; sampled shore length is too rough for small ponds
+  return ["pond", "lake", "wetland"].includes(s.water.kind) ? "" : (s.len / 1000).toFixed(1) + " km on public land";
+}
+function spotTitle(s) { return s.water.name || (s.water.seasonal ? "Seasonal " + s.water.label.toLowerCase() : "Unnamed " + s.water.label.toLowerCase()); }
+
+function render() {
+  const list = visibleSpots();
+  spotLayer.clearLayers(); state.markers.clear();
+  const hot = css("--hot"), fg = css("--panel");
+  for (const s of list) {
+    const m = L.circleMarker([s.lat, s.lng], { radius: 4 + s.score / 14, color: fg, weight: 1.5, fillColor: hot, fillOpacity: 0.35 + s.score / 160 })
+      .on("click", () => select(s, false)).bindTooltip(esc(spotTitle(s)) + " · " + s.score);
+    m.addTo(spotLayer); state.markers.set(s, m);
+  }
+  $("count").textContent = list.length + " spot" + (list.length === 1 ? "" : "s");
+  const ol = $("list"); ol.innerHTML = "";
+  for (const s of list.slice(0, 200)) {
+    const li = document.createElement("li");
+    li.className = "spot" + (state.selected === s ? " sel" : ""); li.tabIndex = 0;
+    li.innerHTML = `<div class="score">${s.score}<span>hidden</span></div><div><h3>${esc(spotTitle(s))}</h3>
+      <div class="meta">${esc(s.unit.Unit_Nm || "Public land")} · ${fmtDist(s.dist)} away</div>
+      <div class="tags"><span class="tag w">${esc(s.water.label)}</span>${s.len >= 240 && lenText(s) ? `<span class="tag w">${lenText(s)}</span>` : s.water.area > 0 ? `<span class="tag w">${(s.water.area / 10000).toFixed(s.water.area < 100000 ? 2 : 0)} ha</span>` : ""}
+      <span class="tag l">${esc(s.unit.MngNm_Desc || "")}</span>${s.bugs.length ? `<span class="tag h">${s.bugs.length} insect record${s.bugs.length > 1 ? "s" : ""}</span>` : ""}
+      ${s.unit.Pub_Access !== "OA" ? `<span class="tag x">${esc(ACCESS[s.unit.Pub_Access])}</span>` : ""}</div></div>`;
+    li.addEventListener("click", () => select(s, true));
+    li.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(s, true); } });
+    ol.appendChild(li);
+  }
+  if (list.length > 200) { const li = document.createElement("li"); li.className = "spot"; li.innerHTML = `<div></div><div class="meta">${list.length - 200} more on the map. Zoom in or narrow the filters.</div>`; ol.appendChild(li); }
+  $("results").hidden = false;
+}
+
+function select(s, pan) {
+  state.selected = s;
+  if (pan) map.setView([s.lat, s.lng], Math.max(map.getZoom(), 15));
+  const m = state.markers.get(s); if (m) m.openTooltip();
+  const d = $("detail"); d.hidden = false;
+  const ll = s.lat.toFixed(5) + "," + s.lng.toFixed(5);
+  const species = {};
+  for (const o of s.bugs) species[o.name] = (species[o.name] || 0) + 1;
+  const spList = Object.entries(species).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([n, c]) => esc(n) + (c > 1 ? " ×" + c : "")).join(", ");
+  d.innerHTML = `<div class="row" style="justify-content:space-between"><span class="tag h">Hidden score ${s.score}</span><button type="button" id="closeDetail">Close</button></div>
+    <h2>${esc(spotTitle(s))}</h2>
+    <dl>
+      <dt>Land</dt><dd>${esc(s.unit.Unit_Nm || "Unnamed public land")}</dd>
+      <dt>Managed by</dt><dd>${esc(s.unit.MngNm_Desc || "")}${s.unit.DesTp_Desc ? " · " + esc(s.unit.DesTp_Desc) : ""}</dd>
+      <dt>Access</dt><dd>${esc(ACCESS[s.unit.Pub_Access] || s.unit.Pub_Access)}</dd>
+      <dt>Water</dt><dd>${esc(s.water.label)}${s.water.area > 0 ? " · " + (s.water.area / 10000).toFixed(s.water.area < 100000 ? 2 : 0) + " ha" : ""}${s.len >= 240 && lenText(s) ? " · " + lenText(s) : ""}${s.water.seasonal ? " · seasonal" : ""}</dd>
+      <dt>Nearest access</dt><dd>${s.accessDist == null ? "Parking data didn't load this time" : s.access ? esc(s.access.kind) + (s.access.name ? " (" + esc(s.access.name) + ")" : "") + ", " + fmtDist(s.accessDist) : "No parking or trailhead mapped nearby"}</dd>
+      <dt>Visitors</dt><dd id="popCell">${s.popularity == null ? "Checking iNaturalist…" : s.popularity + " iNaturalist records (any species) within 500 m"}</dd>
+      <dt>Insects seen</dt><dd>${spList || "No aquatic insect records within 500 m yet"}</dd>
+      <dt>From search point</dt><dd>${fmtDist(s.dist)} · ${ll}</dd>
+    </dl>
+    <p class="meta">${esc(HABITAT[s.water.kind])}</p>
+    ${s.why.length ? `<ul class="why">${s.why.map((w) => "<li>" + esc(w) + "</li>").join("")}</ul>` : ""}
+    <div class="links">
+      <a href="https://www.google.com/maps/dir/?api=1&destination=${ll}" target="_blank" rel="noopener">Directions</a>
+      <a href="https://www.google.com/maps/@${ll},300m/data=!3m1!1e3" target="_blank" rel="noopener">Satellite</a>
+      <a href="https://www.inaturalist.org/observations?lat=${s.lat.toFixed(5)}&lng=${s.lng.toFixed(5)}&radius=1&taxon_ids=${BUG_TAXA}" target="_blank" rel="noopener">iNat insects within 1 km</a>    </div>
+    <p class="note">Photographing is usually fine on open public land. Collecting insects can need a permit, and wildlife refuges and state lands set their own rules.</p>`;
+  $("closeDetail").onclick = () => { d.hidden = true; state.selected = null; render(); };
+  d.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  document.querySelectorAll(".spot.sel").forEach((e) => e.classList.remove("sel"));
+  if (s.popularity == null) checkPopularity([s]).then(() => { if (state.selected === s) select(s, false); });
+}
+
+async function checkPopularity(spots) {
+  const run = state.run;
+  for (const s of spots) {
+    if (run !== state.run) return;
+    if (s.popularity != null || s._checking) continue;
+    s._checking = true;
+    try {
+      const j = await getJSON(INAT + "/observations?" + new URLSearchParams({ lat: s.lat, lng: s.lng, radius: 0.5, per_page: 0 }), {}, 20000);
+      s.popularity = j.total_results; score(s);
+    } catch (e) { /* leave unscored */ }
+    s._checking = false;
+    await sleep(1100); // iNaturalist asks for about one request per second
+  }
+}
+
+function drawLand(land) {
+  landLayer.clearLayers();
+  const c = css("--land");
+  for (const part of land) {
+    const latlngs = part.poly.map((r) => r.map(([x, y]) => [y, x]));
+    const p = part.props;
+    L.polygon(latlngs, { color: c, weight: 1.5, fillColor: c, fillOpacity: p.Pub_Access === "OA" ? 0.32 : 0.14, dashArray: p.Pub_Access === "OA" ? null : "4 4", interactive: true, bubblingMouseEvents: true })
+      .bindPopup(`<b>${esc(p.Unit_Nm)}</b><br>${esc(p.MngNm_Desc)} · ${esc(p.DesTp_Desc)}<br>${esc(ACCESS[p.Pub_Access])}${p.GIS_Acres ? "<br>" + p.GIS_Acres.toLocaleString() + " acres" : ""}`)
+      .addTo(landLayer);
+  }
+}
+function drawBugs(obs) {
+  bugLayer.clearLayers(); const c = css("--accent");
+  for (const o of obs) L.circleMarker([o.lat, o.lng], { radius: 3, stroke: false, fillColor: c, fillOpacity: o.obscured ? 0.25 : 0.8 })
+    .bindPopup(`<b>${esc(o.name)}</b>${o.sci ? " <i>" + esc(o.sci) + "</i>" : ""}<br>${esc(o.date || "")}${o.obscured ? "<br>Location blurred by observer" : ""}<br><a href="${esc(o.url)}" target="_blank" rel="noopener">Open on iNaturalist</a>`).addTo(bugLayer);
+}
+function drawAccess(access) {
+  parkLayer.clearLayers(); const c = css("--muted");
+  for (const a of access) L.circleMarker([a.lat, a.lng], { radius: 3, color: c, weight: 1, fillOpacity: 0.6 }).bindTooltip(esc(a.kind + (a.name ? ": " + a.name : ""))).addTo(parkLayer);
+}
+
+async function search(center, label) {
+  const run = ++state.run;
+  const miles = +$("radius").value, radiusM = miles * 1609.34;
+  const dLat = radiusM / 110540, dLng = radiusM / (111320 * Math.cos(center.lat * Math.PI / 180));
+  const box = [center.lng - dLng, center.lat - dLat, center.lng + dLng, center.lat + dLat].map((v) => +v.toFixed(5));
+  setCenter(center.lat, center.lng);
+  if (radiusCircle) radiusCircle.remove();
+  radiusCircle = L.circle([center.lat, center.lng], { radius: radiusM, color: css("--muted"), weight: 1, dashArray: "3 6", fill: false, interactive: false }).addTo(map);
+  map.fitBounds(radiusCircle.getBounds());
+  $("intro").hidden = true; $("detail").hidden = true; state.selected = null;
+  store.set("qwf-last", { lat: center.lat, lng: center.lng, label, miles });
+  try {
+    status("Loading public land, water and insect records around " + label + "…");
+    const [land, nhd, accessEls, bugs] = await Promise.all([
+      fetchLand(box).catch((e) => { throw new Error("Public land lookup (USGS PAD-US) failed: " + e.message + ". Try again in a minute."); }),
+      fetchWater(box).catch((e) => { throw new Error("Water lookup (USGS NHD) failed: " + e.message + ". Try again or use a smaller radius."); }),
+      Promise.race([fetchAccess(box).catch(() => null), sleep(25000).then(() => null)]),
+      fetchBugs(box).catch(() => ({ obs: [], total: 0 }))
+    ]);
+    if (run !== state.run) return;
+    drawLand(land); drawBugs(bugs.obs);
+    status("Matching water to public land…");
+    await sleep(20);
+    const res = analyse(land, nhd, accessEls, bugs.obs, center, radiusM);
+    const accessNote = res.haveAccess ? "" : " Parking data didn't load, so distance from parking isn't scored this time.";
+    drawAccess(res.access);
+    state.spots = res.spots; state.center = center;
+    render();
+    const n = res.spots.length;
+    status(n ? `${n} spots on ${new Set(res.spots.map((s) => s.unit.Unit_Nm)).size} public units · ${bugs.total.toLocaleString()} aquatic insect records in area${bugs.total > bugs.obs.length ? " (" + bugs.obs.length + " most recent shown)" : ""}. Checking visitor numbers…`
+             : "No public land beside water found here. Try a bigger radius.");
+    // refine the top spots with visitor counts, re-ranking as answers arrive
+    const top = visibleSpots().slice(0, 20);
+    let done = 0;
+    for (const s of top) {
+      await checkPopularity([s]);
+      if (run !== state.run) return;
+      done++;
+      if (done % 4 === 0 || done === top.length) render();
+    }
+    if (run === state.run && n) status(`${n} spots · ${bugs.total.toLocaleString()} aquatic insect records in area · visitor counts checked for the top ${top.length}. Open any spot to check it.${accessNote}`);
+  } catch (e) {
+    if (run === state.run) status(e.message || String(e), true);
+  }
+}
+
+// ---------- controls ----------
+$("searchForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const q = $("place").value.trim(); if (!q) { status("Type a place, or tap Near me.", true); return; }
+  try { status("Finding " + q + "…"); const g = await geocode(q); search(g, g.name); } catch (err) { status(err.message, true); }
+});
+$("locBtn").addEventListener("click", () => {
+  if (!navigator.geolocation) { status("This browser can't share your location. Type a place instead.", true); return; }
+  status("Getting your location…");
+  navigator.geolocation.getCurrentPosition((p) => search({ lat: p.coords.latitude, lng: p.coords.longitude }, "your location"),
+    (err) => status("Location unavailable (" + err.message + "). Type a place or click the map.", true), { enableHighAccuracy: false, timeout: 15000 });
+});
+$("hereBtn").addEventListener("click", () => {
+  const c = centerMarker ? centerMarker._ll : (({ lat, lng }) => ({ lat, lng }))(map.getCenter());
+  if (map.getZoom() < 7 && !centerMarker) { status("Zoom in to an area or click a point first.", true); return; }
+  search(c, c.lat.toFixed(3) + ", " + c.lng.toFixed(3));
+});
+document.querySelectorAll(".sample").forEach((b) => b.addEventListener("click", () => { $("place").value = b.dataset.q; $("searchForm").requestSubmit(); }));
+$("filters").addEventListener("change", () => { if (state.spots.length) render(); });
+$("sort").addEventListener("change", render);
+
+const last = store.get("qwf-last");
+if (last && last.lat) {
+  $("radius").value = String(last.miles || 6);
+  $("place").value = last.label && last.label !== "your location" ? last.label : "";
+  search({ lat: last.lat, lng: last.lng }, last.label || "last search");
+}
+</script>
+</body>
+</html>
