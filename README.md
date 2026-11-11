@@ -1,8 +1,8 @@
-# Quiet Water Finder
+﻿# Quiet Water Finder
 
 Finds public land beside ponds, streams, springs and wetlands anywhere in the US, ranked by how unvisited each spot looks. Made for finding places to photograph aquatic insects: dragonflies, damselflies, mayflies, stoneflies, caddisflies and water bugs.
 
-Open it: https://OWNER.github.io/quiet-water-finder/
+Open it: https://briangooding.github.io/quiet-water-finder/
 
 ## How it works
 
